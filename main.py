@@ -16,7 +16,7 @@ class Pendulum():
         self.L = length
         self.theta_0 = theta_0
         self.thetaDot_0 = theta_dot_0
-        self.theta_list, self.t_list = self.simulate(0.01, 5)
+        self.theta_list, self.t_list = self.simulate(0.001, 1)
         self.dataset = PendulumDataset(self.t_list, self.theta_list)
 
     def simulate(self, dt, t_end):
@@ -104,7 +104,7 @@ def train_epoch(epoch):
 
     return cum_loss/c
 
-undamped_pendulum = Pendulum(damping=.1, mass=2, length=1, theta_0=2, theta_dot_0=1)
+undamped_pendulum = Pendulum(damping=.1, mass=2, length=.5, theta_0=1, theta_dot_0=0)
 train_loader = DataLoader(undamped_pendulum.dataset, 1, shuffle=False)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -116,9 +116,10 @@ optimizer = torch.optim.Adam(PINN_model.parameters(), lr=lr)
 epoch_losses = train_full(10)
 
 theta_NN = []
-t_end = 20
-undamped_pendulum.simulate(0.01, t_end)
-for i in range(2000):
+t_end = 1
+dt = 0.001
+undamped_pendulum.simulate(dt, t_end)
+for i in range(int(t_end/dt)):
     theta_NN.append(PINN_model.forward(torch.unsqueeze(torch.as_tensor(undamped_pendulum.t_list[i], dtype=torch.float32), dim=-1)).item())
 
 fig, axes = plt.subplots(1, 2)
