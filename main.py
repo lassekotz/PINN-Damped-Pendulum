@@ -7,9 +7,10 @@ import matplotlib.pyplot as plt
 import torch
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
+from copy import copy
 
 class Pendulum():
-    def __init__(self, damping, mass, length, theta_0, theta_dot_0, g=9.82, t_0=0, t_end=10, dt=0.001):
+    def __init__(self, damping, mass, length, theta_0, theta_dot_0, g=9.82, t_0=0, t_end=1, dt=0.001):
         self.damping_coefficient = damping
         self.mass = mass
         self.g = g
@@ -21,9 +22,8 @@ class Pendulum():
         self.t_end = t_end
 
         """ state vector """
-        self.state_0 = [0, theta_dot_0, theta_0, t_0]
+        self.state_0 = [0, theta_dot_0, theta_0, t_0]  # INITIAL STATE, BOUNDARY
         self.theta_list, self.t_list = self.simulate(dt, t_end)
-        self.dataset = PendulumDataset(self.t_list, self.theta_list)
 
 
     def simulate(self, dt, t_end):
@@ -42,8 +42,9 @@ class Pendulum():
             cur_state = [psi, phi, theta, t]
             self.state.append(cur_state)
 
-
-        return [x[2] for x in self.state], [x[3] for x in self.state]
+        self.t_list = [x[3] for x in self.state]
+        self.theta_list = [x[2] for x in self.state]
+        return self.theta_list, self.t_list
 
 class PINN(nn.Module):
     def __init__(self, in_size, out_size, h_size):
@@ -59,67 +60,13 @@ class PINN(nn.Module):
         x = self.tanh(x)
         x = self.hidden1(x)
         x = self.tanh(x)
-        x = self.hidden2(x)
-        x = self.tanh(x)
         x = self.out_layer(x)
 
         return x
 
-class PendulumDataset:
-    def __init__(self, inputs, labels):
-        self._pairs = self._collect_pairs(inputs, labels)
-
-    def __getitem__(self, index):
-        input_data, label = self._pairs[index]
-
-        return input_data, label
-
-    def __len__(self):
-        """Total amount of samples in dataset"""
-        return len(self._pairs)
-
-    def _collect_pairs(self, inputs, labels):
-        if len(inputs) != len(labels):
-            raise ValueError("inputs and labels are of different sizes")
-        else:
-            datalist = []
-            for i in range(len(inputs)):
-                datalist.append([float(inputs[i]), float(labels[i])])
-
-            return datalist
-
-def train_full(epochs): # "STANDARD" TRAINING ALGORITHM
-    epoch_loss = []
-    for i in range(epochs):
-        epoch_loss.append(train_epoch(i))
-
-    return epoch_loss
-
-def train_epoch(epoch): # "STANDARD" EPOCH TRAINING ALGORITHM
-    cum_loss = 0
-    c = 0
-    for (x, y) in tqdm(train_loader, desc=f'Epoch {epoch+1} Training'):
-        optimizer.zero_grad()
-        x = torch.unsqueeze(x, -1).float()
-        y = y.float()
-        PINN_model.train()
-        preds = PINN_model.forward(x.to(device))
-        loss = loss_fn(preds, y.to(device))
-
-
-        loss.backward()
-        optimizer.step()
-
-        cum_loss += loss.item()
-        c += 1
-
-    return cum_loss/c
-
+lambda1, lambda2 = 0.001, 0.01
 def train_PINN(training_steps):
-    lambda1, lambda2 = 0.001, 0.05
     t_boundary = torch.tensor(0.).view(-1, 1).requires_grad_(True)
-    t_physics = torch.linspace(damped_pendulum.t_list[0], damped_pendulum.t_list[-1], 300).view(-1, 1).requires_grad_(True)
-
     losses = []
     for i in range(training_steps):
         optimizer.zero_grad()
@@ -139,17 +86,21 @@ def train_PINN(training_steps):
         loss = loss1 + lambda1*loss2 + lambda2*loss3
         loss.backward()
         optimizer.step()
-
-        print(100*i/training_steps)
+        if i % 100 == 0:
+            print(f"Training progress: {(100*i/training_steps):.2f} %")
         losses.append(loss)
 
     return losses
 
-damped_pendulum = Pendulum(damping=.1, mass=2, length=1, theta_0=1, theta_dot_0=0)
-# train_loader = DataLoader(damped_pendulum.dataset, 1, shuffle=False)
+# TODO: INCREASE T_END
+damped_pendulum = Pendulum(damping=.1, mass=2, length=.5, theta_0=2, theta_dot_0=0, t_end=1.0, dt=0.01)
+
+damped_pendulum_long = copy(damped_pendulum)
+damped_pendulum_long.t_end = damped_pendulum_long.t_end*5
+damped_pendulum_long.simulate(damped_pendulum_long.dt, damped_pendulum_long.t_end)
+t_physics = torch.linspace(damped_pendulum_long.t_0, damped_pendulum_long.t_end, 50).view(-1, 1).requires_grad_(True)
 
 PINN_model = PINN(1, 1, 32)
-# loss_fn = nn.MSELoss()
 lr = .001
 optimizer = torch.optim.Adam(PINN_model.parameters(), lr=lr)
 
@@ -157,16 +108,21 @@ epoch_losses = train_PINN(10000)
 epoch_losses = [x.detach().item() for x in epoch_losses]
 
 theta_NN = []
-damped_pendulum.simulate(damped_pendulum.dt, damped_pendulum.t_end)
-for i in range(int(damped_pendulum.t_end/damped_pendulum.dt)):
-    theta_NN.append(PINN_model.forward(torch.unsqueeze(torch.as_tensor(damped_pendulum.t_list[i], dtype=torch.float32), dim=-1)).item())
 
-fig, axes = plt.subplots(1, 2)
-sns.lineplot(data=epoch_losses, ax=axes[0])
-sns.lineplot(data=damped_pendulum.theta_list, ax=axes[1])
-sns.lineplot(data=theta_NN, ax=axes[1])
-axes[0].set_title("Loss over epochs")
-axes[1].set_title("Pendulum")
-axes[1].legend(["Num", "NN"])
-axes[1].set_xlim([0, damped_pendulum.t_end/damped_pendulum.dt])
+n_testpoints = 500
+t_test = torch.linspace(damped_pendulum_long.t_0, damped_pendulum_long.t_end, n_testpoints)
+for i in range(n_testpoints):
+    theta_NN.append(PINN_model(torch.unsqueeze(torch.as_tensor(t_test[i], dtype=torch.float32), dim=-1)).item())
+    #theta_NN.append(PINN_model(t_test[i]))
+
+fig, axes = plt.subplots(2, 1)
+axes[0].plot(epoch_losses)
+axes[1].axvspan(damped_pendulum.t_0, damped_pendulum.t_end, color='y', alpha=0.5, lw=0)
+axes[1].plot(damped_pendulum_long.t_list, damped_pendulum_long.theta_list, 'g')
+axes[1].plot(t_test, theta_NN, '--r')
+axes[1].scatter(t_physics.detach(), torch.zeros_like(t_physics))
+axes[0].set_title("Loss over epochs. Boundary- and Physics Loss (MSE). lambda_1 = " + str(lambda1) + " lambda2 = " + str(lambda2))
+axes[1].set_title("Pendulum simulated over range " + str(damped_pendulum.t_0) + "<= t <= " + str(damped_pendulum.t_end))
+axes[1].legend(["Numerical Solution", "Neural Network Solution"])
+#axes[1].set_xlim([0, damped_pendulum.t_end/damped_pendulum.dt])
 plt.show()
