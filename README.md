@@ -1,4 +1,4 @@
-Physics-Informed Neural Network (PINN) on pendulum system
+Physics-Informed Neural Network (PINN) on pendulum system, inspired on the work of https://github.com/benmoseley/harmonic-oscillator-pinn-workshop
 
 The model is set out to:
 
